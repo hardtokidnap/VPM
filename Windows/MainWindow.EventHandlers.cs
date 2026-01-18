@@ -3498,7 +3498,7 @@ namespace VPM
                     // Index any missing packages
                     if (unindexedPaths.Count > 0)
                     {
-                        await _imageManager.BuildImageIndexFromVarsAsync(unindexedPaths, false);
+                        await _imageManager.BuildImageIndexFromVarsAsync(unindexedPaths, false, maxImagesPerVar: 50);
                     }
                 }
 

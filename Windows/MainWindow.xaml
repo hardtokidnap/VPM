@@ -5310,6 +5310,7 @@
                                                                                 <ColumnDefinition Width="*" MinWidth="10" />
                                                                                 <ColumnDefinition Width="Auto" />
                                                                                 <ColumnDefinition Width="Auto" />
+                                                                                <ColumnDefinition Width="Auto" />
                                                                             </Grid.ColumnDefinitions>
 
                                                                             <!--  Load/Unload button (hidden in Custom mode)  -->
@@ -5413,6 +5414,25 @@
                                                                                 FontSize="16"
                                                                                 Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}"
                                                                                 Text="{Binding Items[0].ItemFileSizeFormatted}" />
+
+                                                                            <!--  Load More images button  -->
+                                                                            <Button
+                                                                                x:Name="LoadMoreImagesButton"
+                                                                                Grid.Column="5"
+                                                                                Width="120"
+                                                                                Height="26"
+                                                                                Margin="0,0,16,0"
+                                                                                Padding="10,0"
+                                                                                Click="PackageHeaderLoadMore_Click"
+                                                                                Content="Load More"
+                                                                                FontSize="11"
+                                                                                FontWeight="SemiBold"
+                                                                                ToolTip="Index and show 50 more images from this package"
+                                                                                Visibility="{Binding Items[0].HasMoreImages, Converter={StaticResource BoolToVis}}">
+                                                                                <Button.Style>
+                                                                                    <Style BasedOn="{StaticResource BlueHoverButtonStyle}" TargetType="Button" />
+                                                                                </Button.Style>
+                                                                            </Button>
                                                                         </Grid>
                                                                     </Border>
                                                                     <!--  Items container  -->

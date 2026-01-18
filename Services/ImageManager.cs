@@ -35,6 +35,7 @@ namespace VPM.Services
         // Image index mapping package names to their VAR file paths and internal image paths
         public Dictionary<string, List<ImageLocation>> ImageIndex { get; private set; } = new Dictionary<string, List<ImageLocation>>(StringComparer.OrdinalIgnoreCase);
         public ConcurrentDictionary<string, List<ImageLocation>> PreviewImageIndex { get; } = new ConcurrentDictionary<string, List<ImageLocation>>(StringComparer.OrdinalIgnoreCase);
+        public ConcurrentDictionary<string, bool> HasMoreImages { get; } = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, (long length, long lastWriteTicks)> _imageIndexSignatures = new(StringComparer.OrdinalIgnoreCase);
         private readonly ReaderWriterLockSlim _signatureLock = new ReaderWriterLockSlim();
         
@@ -338,7 +339,10 @@ namespace VPM.Services
             _sharedArchivePools.Clear();
         }
 
-        public async Task<bool> BuildImageIndexFromVarsAsync(IEnumerable<string> varPaths, bool forceRebuild = false)
+        /// <summary>
+        /// Builds an image index for a list of VAR files
+        /// </summary>
+        public async Task<bool> BuildImageIndexFromVarsAsync(IEnumerable<string> varPaths, bool forceRebuild = false, int maxImagesPerVar = -1)
         {
             var varPathsList = varPaths.ToList();
             
@@ -352,6 +356,7 @@ namespace VPM.Services
             {
                 ImageIndex.Clear();
                 _imageIndexSignatures.Clear();
+                HasMoreImages.Clear();
             }
             else
             {
@@ -371,7 +376,7 @@ namespace VPM.Services
                 await semaphore.WaitAsync();
                 try
                 {
-                    await Task.Run(() => IndexImagesInVar(varPath));
+                    await Task.Run(() => IndexImagesInVar(varPath, maxImagesPerVar));
                 }
                 finally
                 {
@@ -382,6 +387,128 @@ namespace VPM.Services
             await Task.WhenAll(indexTasks);
 
             return true;
+        }
+
+        /// <summary>
+        /// Indexes more images for a package that was partially indexed
+        /// </summary>
+        public async Task<bool> IndexMoreImagesAsync(string varPath, int count)
+        {
+            if (string.IsNullOrEmpty(varPath) || !File.Exists(varPath))
+                return false;
+
+            var packageName = Path.GetFileNameWithoutExtension(varPath);
+            // If we don't know if there are more, we assume there might be if it's not indexed or we have some
+            if (!HasMoreImages.TryGetValue(packageName, out var hasMore) || !hasMore)
+                return false;
+
+            return await Task.Run(() => 
+            {
+                _asyncPool.RegisterActiveFile(varPath);
+                try
+                {
+                    var lockFreeReader = _asyncPool.LockFreeReader;
+                    var allEntries = lockFreeReader.GetAllEntries(varPath).ToList();
+                    
+                    var allFilesFlattened = new List<string>();
+                    foreach (var entry in allEntries)
+                    {
+                        if (!entry.IsDirectory)
+                            allFilesFlattened.Add(Path.GetFileName(entry.Path).ToLower());
+                    }
+
+                    List<ImageLocation> currentLocations;
+                    _varArchiveLock.EnterReadLock();
+                    try
+                    {
+                        if (!ImageIndex.TryGetValue(packageName, out currentLocations))
+                            return false;
+                    }
+                    finally
+                    {
+                        _varArchiveLock.ExitReadLock();
+                    }
+
+                    var indexedPaths = new HashSet<string>(currentLocations.Select(l => l.InternalPath), StringComparer.OrdinalIgnoreCase);
+                    var newLocations = new List<ImageLocation>();
+                    bool reachedLimit = false;
+
+                    foreach (var entry in allEntries)
+                    {
+                        if (entry.IsDirectory) continue;
+                        if (indexedPaths.Contains(entry.Path)) continue;
+
+                        var ext = Path.GetExtension(entry.Path).ToLower();
+                        if (ext != ".jpg" && ext != ".jpeg" && ext != ".png") continue;
+
+                        if (entry.UncompressedSize < 1024 || entry.UncompressedSize > 1024 * 1024) continue;
+
+                        if (!PreviewImageValidator.IsPreviewImage(Path.GetFileName(entry.Path).ToLower(), allFilesFlattened)) continue;
+
+                        var (width, height) = lockFreeReader.GetImageDimensions(varPath, entry.Path);
+                        if (width <= 0 || height <= 0) continue;
+
+                        newLocations.Add(new ImageLocation
+                        {
+                            VarFilePath = varPath,
+                            InternalPath = entry.Path,
+                            FileSize = entry.UncompressedSize,
+                            Width = width,
+                            Height = height
+                        });
+
+                        if (newLocations.Count >= count)
+                        {
+                            reachedLimit = true;
+                            break;
+                        }
+                    }
+
+                    if (newLocations.Count > 0)
+                    {
+                        _varArchiveLock.EnterWriteLock();
+                        try
+                        {
+                            currentLocations.AddRange(newLocations);
+                        }
+                        finally
+                        {
+                            _varArchiveLock.ExitWriteLock();
+                        }
+                    }
+
+                    // Check if there are STILL more images
+                    bool stillHasMore = false;
+                    if (reachedLimit)
+                    {
+                        var totalIndexed = currentLocations.Count;
+                        int potentialCount = 0;
+                        foreach (var entry in allEntries)
+                        {
+                            if (entry.IsDirectory) continue;
+                            var ext = Path.GetExtension(entry.Path).ToLower();
+                            if (ext != ".jpg" && ext != ".jpeg" && ext != ".png") continue;
+                            if (entry.UncompressedSize < 1024 || entry.UncompressedSize > 1024 * 1024) continue;
+                            if (PreviewImageValidator.IsPreviewImage(Path.GetFileName(entry.Path).ToLower(), allFilesFlattened))
+                            {
+                                potentialCount++;
+                            }
+                        }
+                        stillHasMore = potentialCount > totalIndexed;
+                    }
+                    else
+                    {
+                        stillHasMore = false;
+                    }
+                    HasMoreImages[packageName] = stillHasMore;
+
+                    return newLocations.Count > 0;
+                }
+                finally
+                {
+                    _asyncPool.UnregisterActiveFile(varPath);
+                }
+            });
         }
         
         /// <summary>
@@ -418,7 +545,7 @@ namespace VPM.Services
         /// Applies same validation as loading to prevent non-preview images
         /// Uses header-only reads for dimension detection (95-99% memory reduction)
         /// </summary>
-        private bool IndexImagesInVar(string varPath)
+        private bool IndexImagesInVar(string varPath, int maxImages = -1)
         {
             // Check if file is locked/cancelled
             if (_asyncPool.IsFileCancelled(varPath))
@@ -483,6 +610,7 @@ namespace VPM.Services
                     }
                 }
 
+                bool reachedLimit = false;
                 // Now check each image file for pairing
                 foreach (var entry in allEntries)
                 {
@@ -506,6 +634,12 @@ namespace VPM.Services
                         continue;
                     }
 
+                    if (maxImages > 0 && imageLocations.Count >= maxImages)
+                    {
+                        reachedLimit = true;
+                        break;
+                    }
+
                     // Use lock-free reader for dimension detection
                     // File is opened, header read, file closed immediately
                     var (width, height) = lockFreeReader.GetImageDimensions(varPath, entry.Path);
@@ -526,6 +660,25 @@ namespace VPM.Services
                     });
                 }
 
+                // If we reached limit, check if there are actually more images
+                bool stillHasMore = false;
+                if (reachedLimit)
+                {
+                    int potentialCount = 0;
+                    foreach (var entry in allEntries)
+                    {
+                        if (entry.IsDirectory) continue;
+                        var ext = Path.GetExtension(entry.Path).ToLower();
+                        if (ext != ".jpg" && ext != ".jpeg" && ext != ".png") continue;
+                        if (entry.UncompressedSize < 1024 || entry.UncompressedSize > 1024 * 1024) continue;
+                        if (PreviewImageValidator.IsPreviewImage(Path.GetFileName(entry.Path).ToLower(), allFilesFlattened))
+                        {
+                            potentialCount++;
+                        }
+                    }
+                    stillHasMore = potentialCount > imageLocations.Count;
+                }
+                HasMoreImages[packageName] = stillHasMore;
 
                 if (imageLocations.Count > 0)
                 {

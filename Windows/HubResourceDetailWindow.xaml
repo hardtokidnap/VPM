@@ -207,6 +207,13 @@
 
             <!--  Buttons  -->
             <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <CheckBox
+                    x:Name="HideInstalledCheck"
+                    Margin="0,0,16,0"
+                    VerticalAlignment="Center"
+                    Checked="HideInstalledCheck_Changed"
+                    Content="Hide Installed"
+                    Unchecked="HideInstalledCheck_Changed" />
                 <Button
                     x:Name="DownloadAllButton"
                     Width="120"

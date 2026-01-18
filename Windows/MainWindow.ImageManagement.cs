@@ -818,7 +818,7 @@ namespace VPM
 
                         if (pathsToIndex.Count > 0)
                         {
-                            await _imageManager.BuildImageIndexFromVarsAsync(pathsToIndex, forceRebuild: false);
+                            await _imageManager.BuildImageIndexFromVarsAsync(pathsToIndex, forceRebuild: false, maxImagesPerVar: 50);
                         }
                     }
                 }
@@ -931,6 +931,7 @@ namespace VPM
                                     ImageHeight = location.Height,
                                     ItemFileSize = totalItemSize, // Set total size including sister files
                                     GroupKey = package.Name, // Group by package name in Packages mode
+                                    HasMoreImages = _imageManager.HasMoreImages.TryGetValue(packageBase, out var hasMore) && hasMore,
                                     LoadImageCallback = async () => 
                                     {
                                         try
@@ -1717,6 +1718,116 @@ namespace VPM
             }
             catch (Exception)
             {
+            }
+        }
+
+        private async void PackageHeaderLoadMore_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                var button = sender as Button;
+                if (button == null) return;
+
+                var parent = VisualTreeHelper.GetParent(button);
+                while (parent != null && !(parent is GroupItem))
+                {
+                    parent = VisualTreeHelper.GetParent(parent);
+                }
+
+                if (parent is GroupItem groupItem && groupItem.Content is CollectionViewGroup group)
+                {
+                    if (group.Items.Count > 0 && group.Items[0] is ImagePreviewItem firstItem)
+                    {
+                        var packageItem = firstItem.PackageItem;
+                        if (packageItem == null || _imageManager == null) return;
+
+                        var metadata = GetCachedPackageMetadata(!string.IsNullOrEmpty(packageItem.MetadataKey) ? packageItem.MetadataKey : packageItem.Name);
+                        if (metadata == null || string.IsNullOrEmpty(metadata.FilePath)) return;
+
+                        // Change button content to "Loading..."
+                        button.IsEnabled = false;
+                        var originalContent = button.Content;
+                        button.Content = "Loading...";
+
+                        // Index 50 more images
+                        bool added = await _imageManager.IndexMoreImagesAsync(metadata.FilePath, 50);
+                        
+                        if (added)
+                        {
+                            var packageBase = System.IO.Path.GetFileNameWithoutExtension(metadata.Filename);
+                            if (_imageManager.ImageIndex.TryGetValue(packageBase, out var locations))
+                            {
+                                // Find which ones are new
+                                var existingPaths = new HashSet<string>(group.Items.Cast<ImagePreviewItem>().Select(i => i.InternalPath), StringComparer.OrdinalIgnoreCase);
+                                var newLocations = locations.Where(l => !existingPaths.Contains(l.InternalPath)).ToList();
+                                
+                                if (newLocations.Count > 0)
+                                {
+                                    var gameFolder = _settingsManager?.Settings?.SelectedFolder;
+                                    var statusBrush = firstItem.StatusBrush;
+                                    
+                                    // Batch check extraction status for new images
+                                    Dictionary<string, bool> extractionStatus = null;
+                                    if (!string.IsNullOrEmpty(gameFolder))
+                                    {
+                                        var internalPaths = newLocations.Select(l => l.InternalPath).ToList();
+                                        extractionStatus = VPM.Services.VarContentExtractor.BatchCheckExtractionStatus(metadata.FilePath, internalPaths, gameFolder);
+                                    }
+
+                                    var hasMore = _imageManager.HasMoreImages.TryGetValue(packageBase, out var more) && more;
+
+                                    foreach (var location in newLocations)
+                                    {
+                                        bool isExtracted = false;
+                                        if (extractionStatus != null && extractionStatus.TryGetValue(location.InternalPath, out var status))
+                                            isExtracted = status;
+
+                                        var totalItemSize = CalculateTotalItemSizeWithSisterFiles(location.VarFilePath, location.InternalPath);
+
+                                        var newItem = new ImagePreviewItem
+                                        {
+                                            Image = null,
+                                            PackageName = packageItem.Name,
+                                            InternalPath = location.InternalPath,
+                                            VarFilePath = location.VarFilePath,
+                                            StatusBrush = statusBrush,
+                                            PackageItem = packageItem,
+                                            IsExtracted = isExtracted,
+                                            ImageWidth = location.Width,
+                                            ImageHeight = location.Height,
+                                            ItemFileSize = totalItemSize,
+                                            GroupKey = packageItem.Name,
+                                            HasMoreImages = hasMore,
+                                            LoadImageCallback = async () => 
+                                            {
+                                                return await _imageManager.LoadImageAsync(location.VarFilePath, location.InternalPath, 0, 0);
+                                            }
+                                        };
+
+                                        // Add to collections
+                                        PreviewImages.Add(newItem);
+                                        _allPreviewImages.Add(newItem);
+                                        _imageListViewService.CacheItem(newItem);
+                                    }
+
+                                    // Update HasMoreImages for ALL items in this group so the button visibility updates
+                                    foreach (var item in group.Items)
+                                    {
+                                        if (item is ImagePreviewItem ipi)
+                                            ipi.HasMoreImages = hasMore;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        button.Content = originalContent;
+                        button.IsEnabled = true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadMoreError] {ex.Message}");
             }
         }
 

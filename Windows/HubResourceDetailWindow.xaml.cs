@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.ComponentModel;
 using System.Windows.Media.Imaging;
 using VPM.Models;
 using VPM.Services;
@@ -18,16 +21,23 @@ namespace VPM.Windows
     {
         private readonly HubResourceDetail _resource;
         private readonly HubService _hubService;
+        private readonly SettingsManager _settingsManager;
         private readonly string _destinationFolder;
-        private List<HubFileViewModel> _files;
+        private ObservableCollection<HubFileViewModel> _files;
+        private bool _hideInstalled;
 
-        public HubResourceDetailWindow(HubResourceDetail resource, HubService hubService, string destinationFolder)
+        public HubResourceDetailWindow(HubResourceDetail resource, HubService hubService, SettingsManager settingsManager, string destinationFolder)
         {
             InitializeComponent();
 
             _resource = resource;
             _hubService = hubService;
+            _settingsManager = settingsManager;
             _destinationFolder = destinationFolder;
+
+            _hideInstalled = _settingsManager?.GetSetting("HubBrowserHideInstalled", false) ?? false;
+            if (HideInstalledCheck != null)
+                HideInstalledCheck.IsChecked = _hideInstalled;
 
             LoadResourceDetails();
         }
@@ -56,7 +66,7 @@ namespace VPM.Windows
             }
 
             // Build files list
-            _files = new List<HubFileViewModel>();
+            _files = new ObservableCollection<HubFileViewModel>();
 
             if (_resource.HubFiles != null)
             {
@@ -78,7 +88,37 @@ namespace VPM.Windows
                 }
             }
 
-            FilesItemsControl.ItemsSource = _files;
+            var view = CollectionViewSource.GetDefaultView(_files);
+            view.SortDescriptions.Clear();
+            view.SortDescriptions.Add(new SortDescription(nameof(HubFileViewModel.StatusPriority), ListSortDirection.Ascending));
+            view.SortDescriptions.Add(new SortDescription(nameof(HubFileViewModel.Filename), ListSortDirection.Ascending));
+            
+            view.Filter = (item) =>
+            {
+                if (!_hideInstalled) return true;
+                if (item is HubFileViewModel vm)
+                {
+                    return !vm.AlreadyHave && !vm.IsInstalled;
+                }
+                return true;
+            };
+
+            if (view is ICollectionViewLiveShaping liveView)
+            {
+                if (liveView.CanChangeLiveSorting)
+                {
+                    liveView.LiveSortingProperties.Add(nameof(HubFileViewModel.StatusPriority));
+                    liveView.IsLiveSorting = true;
+                }
+                if (liveView.CanChangeLiveFiltering)
+                {
+                    liveView.LiveFilteringProperties.Add(nameof(HubFileViewModel.AlreadyHave));
+                    liveView.LiveFilteringProperties.Add(nameof(HubFileViewModel.IsInstalled));
+                    liveView.IsLiveFiltering = true;
+                }
+            }
+
+            FilesItemsControl.ItemsSource = view;
             UpdateDownloadAllButton();
         }
 
@@ -202,6 +242,13 @@ namespace VPM.Windows
         private void Close_Click(object sender, RoutedEventArgs e)
         {
             Close();
+        }
+
+        private void HideInstalledCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            _hideInstalled = HideInstalledCheck?.IsChecked == true;
+            _settingsManager?.UpdateSetting("HubBrowserHideInstalled", _hideInstalled);
+            CollectionViewSource.GetDefaultView(_files)?.Refresh();
         }
     }
 }

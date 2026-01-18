@@ -558,7 +558,8 @@
                                 GotFocus="SearchBox_GotFocus"
                                 KeyDown="SearchBox_KeyDown"
                                 LostFocus="SearchBox_LostFocus"
-                                Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+                                Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                TextChanged="SearchBox_TextChanged" />
                             <TextBlock
                                 x:Name="SearchPlaceholder"
                                 Margin="10,0,0,0"
@@ -2471,15 +2472,24 @@
                                 </ComboBox>
                             </Grid>
 
-                            <CheckBox
-                                x:Name="LoadAfterDownloadCheck"
-                                Grid.Row="2"
-                                Margin="0,8,0,0"
-                                Checked="LoadAfterDownloadCheck_Changed"
-                                Content=" Load Dependencies After Download"
-                                Style="{StaticResource HubOptionCheckBoxStyle}"
-                                ToolTip="After downloading a package, automatically load its dependencies."
-                                Unchecked="LoadAfterDownloadCheck_Changed" />
+                            <StackPanel Grid.Row="2" Margin="0,8,0,0">
+                                <CheckBox
+                                    x:Name="LoadAfterDownloadCheck"
+                                    Checked="LoadAfterDownloadCheck_Changed"
+                                    Content=" Load Dependencies After Download"
+                                    Style="{StaticResource HubOptionCheckBoxStyle}"
+                                    ToolTip="After downloading a package, automatically load its dependencies."
+                                    Unchecked="LoadAfterDownloadCheck_Changed" />
+
+                                <CheckBox
+                                    x:Name="HideInstalledCheck"
+                                    Margin="0,4,0,0"
+                                    Checked="HideInstalledCheck_Changed"
+                                    Content=" Hide Installed Packages"
+                                    Style="{StaticResource HubOptionCheckBoxStyle}"
+                                    ToolTip="Hide packages and dependencies that are already in your library."
+                                    Unchecked="HideInstalledCheck_Changed" />
+                            </StackPanel>
 
                             <!--  Progress overlay with Cancel button (shown during downloads)  -->
                             <Grid
@@ -2574,6 +2584,49 @@
                                     </Button.Style>
                                 </Button>
                             </Grid>
+                        </Grid>
+
+                        <!--  Files List Header and Filter  -->
+                        <Grid Margin="0,12,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                x:Name="FilesHeader"
+                                VerticalAlignment="Center"
+                                FontSize="13"
+                                FontWeight="SemiBold"
+                                Foreground="{StaticResource DarkText}"
+                                Text="📄 Files" />
+                            <Border
+                                Grid.Column="1"
+                                Width="150"
+                                Height="24"
+                                Background="{StaticResource DarkControlBackground}"
+                                BorderBrush="{StaticResource DarkBorder}"
+                                BorderThickness="1"
+                                CornerRadius="3">
+                                <Grid>
+                                    <TextBox
+                                        x:Name="DetailSearchBox"
+                                        Padding="4,0"
+                                        VerticalAlignment="Center"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        FontSize="11"
+                                        Foreground="White"
+                                        TextChanged="DetailSearchBox_TextChanged" />
+                                    <TextBlock
+                                        Margin="6,0"
+                                        VerticalAlignment="Center"
+                                        FontSize="10"
+                                        Foreground="#888888"
+                                        IsHitTestVisible="False"
+                                        Text="Filter files..."
+                                        Visibility="{Binding Text, ElementName=DetailSearchBox, Converter={StaticResource NullToVis}, ConverterParameter=invert}" />
+                                </Grid>
+                            </Border>
                         </Grid>
 
                         <!--  Files List  -->

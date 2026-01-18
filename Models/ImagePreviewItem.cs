@@ -350,6 +350,20 @@ namespace VPM.Models
         }
 
         public string ItemFileSizeFormatted => FormatHelper.FormatFileSize(ItemFileSize);
+        
+        private bool _hasMoreImages;
+        public bool HasMoreImages
+        {
+            get => _hasMoreImages;
+            set
+            {
+                if (_hasMoreImages != value)
+                {
+                    _hasMoreImages = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
 
         public event PropertyChangedEventHandler PropertyChanged;
 

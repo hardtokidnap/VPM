@@ -1065,7 +1065,7 @@ namespace VPM
 
                         if (preloadPaths.Count > 0)
                         {
-                            await _imageManager.BuildImageIndexFromVarsAsync(preloadPaths, forceRebuild: false);
+                            await _imageManager.BuildImageIndexFromVarsAsync(preloadPaths, forceRebuild: false, maxImagesPerVar: 50);
                         }
                     }
                 }

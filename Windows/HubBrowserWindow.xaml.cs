@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -305,6 +306,41 @@ namespace VPM.Windows
                 Debug.WriteLine($"[HubBrowserWindow] Failed to update LoadAfterDownload setting: {ex}");
             }
         }
+
+        private void HideInstalledCheck_Changed(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                if (_settingsManager == null)
+                    return;
+
+                if (!IsLoaded)
+                    return;
+
+                _hideInstalledPackages = HideInstalledCheck?.IsChecked == true;
+                _settingsManager.UpdateSetting("HubBrowserHideInstalled", _hideInstalledPackages);
+
+                // Refresh views to apply filtering
+                CollectionViewSource.GetDefaultView(_currentFiles)?.Refresh();
+                CollectionViewSource.GetDefaultView(_currentDependencies)?.Refresh();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[HubBrowserWindow] Failed to update HideInstalled setting: {ex}");
+            }
+        }
+
+        private void DetailSearchBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (sender is TextBox textBox)
+            {
+                _detailSearchText = textBox.Text;
+
+                // Refresh views to apply filtering
+                CollectionViewSource.GetDefaultView(_currentFiles)?.Refresh();
+                CollectionViewSource.GetDefaultView(_currentDependencies)?.Refresh();
+            }
+        }
         
         // Stack-based detail navigation
         private Stack<DetailStackEntry> _detailStack = new Stack<DetailStackEntry>();
@@ -317,6 +353,8 @@ namespace VPM.Windows
         private string _oldVersionHandling = "No Change";
 
         private bool _loadPackageAndDependenciesAfterDownload = false;
+        private bool _hideInstalledPackages = false;
+        private string _detailSearchText = "";
         
         // Pre-computed lookups for fast library status checking
         private HashSet<string> _localPackageNames;  // All package names (without .var)
@@ -464,6 +502,69 @@ namespace VPM.Windows
             _currentFiles = new ObservableCollection<HubFileViewModel>();
             _currentDependencies = new ObservableCollection<HubFileViewModel>();
             
+            // Set up sorting for files and dependencies
+            var filesView = CollectionViewSource.GetDefaultView(_currentFiles);
+            filesView.SortDescriptions.Add(new SortDescription(nameof(HubFileViewModel.StatusPriority), ListSortDirection.Ascending));
+            filesView.SortDescriptions.Add(new SortDescription(nameof(HubFileViewModel.Filename), ListSortDirection.Ascending));
+            filesView.Filter = (item) =>
+            {
+                if (item is HubFileViewModel vm)
+                {
+                    if (_hideInstalledPackages && (vm.AlreadyHave || vm.IsInstalled)) return false;
+                    if (!string.IsNullOrWhiteSpace(_detailSearchText))
+                    {
+                        return vm.Filename?.Contains(_detailSearchText, StringComparison.OrdinalIgnoreCase) == true;
+                    }
+                }
+                return true;
+            };
+
+            if (filesView is ICollectionViewLiveShaping filesLive)
+            {
+                if (filesLive.CanChangeLiveSorting)
+                {
+                    filesLive.LiveSortingProperties.Add(nameof(HubFileViewModel.StatusPriority));
+                    filesLive.IsLiveSorting = true;
+                }
+                if (filesLive.CanChangeLiveFiltering)
+                {
+                    filesLive.LiveFilteringProperties.Add(nameof(HubFileViewModel.AlreadyHave));
+                    filesLive.LiveFilteringProperties.Add(nameof(HubFileViewModel.IsInstalled));
+                    filesLive.IsLiveFiltering = true;
+                }
+            }
+
+            var depsView = CollectionViewSource.GetDefaultView(_currentDependencies);
+            depsView.SortDescriptions.Add(new SortDescription(nameof(HubFileViewModel.StatusPriority), ListSortDirection.Ascending));
+            depsView.SortDescriptions.Add(new SortDescription(nameof(HubFileViewModel.Filename), ListSortDirection.Ascending));
+            depsView.Filter = (item) =>
+            {
+                if (item is HubFileViewModel vm)
+                {
+                    if (_hideInstalledPackages && (vm.AlreadyHave || vm.IsInstalled)) return false;
+                    if (!string.IsNullOrWhiteSpace(_detailSearchText))
+                    {
+                        return vm.Filename?.Contains(_detailSearchText, StringComparison.OrdinalIgnoreCase) == true;
+                    }
+                }
+                return true;
+            };
+
+            if (depsView is ICollectionViewLiveShaping depsLive)
+            {
+                if (depsLive.CanChangeLiveSorting)
+                {
+                    depsLive.LiveSortingProperties.Add(nameof(HubFileViewModel.StatusPriority));
+                    depsLive.IsLiveSorting = true;
+                }
+                if (depsLive.CanChangeLiveFiltering)
+                {
+                    depsLive.LiveFilteringProperties.Add(nameof(HubFileViewModel.AlreadyHave));
+                    depsLive.LiveFilteringProperties.Add(nameof(HubFileViewModel.IsInstalled));
+                    depsLive.IsLiveFiltering = true;
+                }
+            }
+            
             // Subscribe to download queue events
             _hubService.DownloadQueued += HubService_DownloadQueued;
             _hubService.DownloadStarted += HubService_DownloadStarted;
@@ -604,10 +705,16 @@ namespace VPM.Windows
                 {
                     LoadAfterDownloadCheck.IsChecked = _loadPackageAndDependenciesAfterDownload;
                 }
+                
+                _hideInstalledPackages = _settingsManager.GetSetting("HubBrowserHideInstalled", false);
+                if (HideInstalledCheck != null)
+                {
+                    HideInstalledCheck.IsChecked = _hideInstalledPackages;
+                }
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[HubBrowserWindow] Failed to restore LoadAfterDownload setting: {ex}");
+                Debug.WriteLine($"[HubBrowserWindow] Failed to restore settings: {ex}");
             }
 
             // Restore Tags filter selection before the initial search runs
@@ -1338,6 +1445,16 @@ namespace VPM.Windows
                 ? Visibility.Visible 
                 : Visibility.Collapsed;
         }
+
+        private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (SearchPlaceholder != null)
+            {
+                SearchPlaceholder.Visibility = string.IsNullOrEmpty(SearchBox.Text)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+        }
         
         #region Tags Filter
         
@@ -1896,6 +2013,13 @@ namespace VPM.Windows
 
         private void PopulateDetailPanel(HubResourceDetail detail)
         {
+            // Reset search filter
+            if (DetailSearchBox != null)
+            {
+                DetailSearchBox.Text = "";
+                _detailSearchText = "";
+            }
+
             // Set basic info
             DetailTitle.Text = detail.Title ?? "";
             DetailOpenInBrowserButton.Tag = detail.ResourceId;
@@ -2088,12 +2212,12 @@ namespace VPM.Windows
                 }
             }
             
-            DetailFilesControl.ItemsSource = _currentFiles;
+            DetailFilesControl.ItemsSource = CollectionViewSource.GetDefaultView(_currentFiles);
             
             if (_currentDependencies.Any())
             {
                 DependenciesHeader.Visibility = Visibility.Visible;
-                DetailDependenciesControl.ItemsSource = _currentDependencies;
+                DetailDependenciesControl.ItemsSource = CollectionViewSource.GetDefaultView(_currentDependencies);
             }
             else
             {
@@ -3615,6 +3739,13 @@ namespace VPM.Windows
         {
             try
             {
+                // Reset search filter
+                if (DetailSearchBox != null)
+                {
+                    DetailSearchBox.Text = "";
+                    _detailSearchText = "";
+                }
+
                 // Show loading spinner
                 StatusLoadingSpinner.Visibility = Visibility.Visible;
                 StatusText.Text = "Checking for updates...";
@@ -3763,6 +3894,13 @@ namespace VPM.Windows
         {
             try
             {
+                // Reset search filter
+                if (DetailSearchBox != null)
+                {
+                    DetailSearchBox.Text = "";
+                    _detailSearchText = "";
+                }
+
                 // Show loading spinner
                 StatusLoadingSpinner.Visibility = Visibility.Visible;
                 StatusText.Text = "Scanning for missing dependencies...";
@@ -4035,6 +4173,7 @@ namespace VPM.Windows
         private bool _isDownloading;
         private bool _isInstalled;
         private bool _hasUpdate;
+        private bool _alreadyHave;
         private float _progress;
 
         public string Filename { get; set; }
@@ -4044,20 +4183,36 @@ namespace VPM.Windows
         public string LicenseType { get; set; }
         public bool IsDependency { get; set; }
         public bool NotOnHub { get; set; }
-        public bool AlreadyHave { get; set; }
         public HubFile HubFile { get; set; }
         public string LocalPath { get; set; } // Path to installed file
+
+        public bool AlreadyHave
+        {
+            get => _alreadyHave;
+            set { _alreadyHave = value; OnPropertyChanged(nameof(AlreadyHave)); OnPropertyChanged(nameof(StatusPriority)); }
+        }
+        
+        public int StatusPriority
+        {
+            get
+            {
+                if (IsDownloading) return 1;
+                if (Status == "Queued...") return 2;
+                if (AlreadyHave || IsInstalled) return 3;
+                return 4;
+            }
+        }
         
         public bool HasUpdate
         {
             get => _hasUpdate;
-            set { _hasUpdate = value; OnPropertyChanged(nameof(HasUpdate)); }
+            set { _hasUpdate = value; OnPropertyChanged(nameof(HasUpdate)); OnPropertyChanged(nameof(StatusPriority)); }
         }
 
         public bool IsInstalled
         {
             get => _isInstalled;
-            set { _isInstalled = value; OnPropertyChanged(nameof(IsInstalled)); }
+            set { _isInstalled = value; OnPropertyChanged(nameof(IsInstalled)); OnPropertyChanged(nameof(StatusPriority)); }
         }
 
         public string FileSizeFormatted
@@ -4069,7 +4224,7 @@ namespace VPM.Windows
         public string Status
         {
             get => _status;
-            set { _status = value; OnPropertyChanged(nameof(Status)); }
+            set { _status = value; OnPropertyChanged(nameof(Status)); OnPropertyChanged(nameof(StatusPriority)); }
         }
 
         public SolidColorBrush StatusColor
@@ -4093,7 +4248,7 @@ namespace VPM.Windows
         public bool IsDownloading
         {
             get => _isDownloading;
-            set { _isDownloading = value; OnPropertyChanged(nameof(IsDownloading)); }
+            set { _isDownloading = value; OnPropertyChanged(nameof(IsDownloading)); OnPropertyChanged(nameof(StatusPriority)); }
         }
 
         public float Progress
@@ -4123,14 +4278,18 @@ namespace VPM.Windows
     {
         public object Convert(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
         {
+            bool invert = parameter != null && parameter.ToString().ToLower() == "invert";
+            
             if (value == null)
-                return Visibility.Collapsed;
+                return invert ? Visibility.Visible : Visibility.Collapsed;
             
             var stringValue = value.ToString();
-            if (string.IsNullOrEmpty(stringValue) || stringValue == "null")
-                return Visibility.Collapsed;
+            bool isEmpty = string.IsNullOrEmpty(stringValue) || stringValue == "null";
             
-            return Visibility.Visible;
+            if (invert)
+                return isEmpty ? Visibility.Visible : Visibility.Collapsed;
+            
+            return isEmpty ? Visibility.Collapsed : Visibility.Visible;
         }
 
         public object ConvertBack(object value, Type targetType, object parameter, System.Globalization.CultureInfo culture)
