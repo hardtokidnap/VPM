@@ -688,6 +688,26 @@ namespace VPM
 
         #region Dependencies Display
 
+        private List<CustomDependencyLink> GetCustomDependents(VarMetadata packageMetadata)
+        {
+            if (packageMetadata == null)
+                return new List<CustomDependencyLink>();
+            
+            var baseName = $"{packageMetadata.CreatorName}.{packageMetadata.PackageName}";
+            if (string.IsNullOrEmpty(baseName))
+                return new List<CustomDependencyLink>();
+            
+            if (_customDependencyIndex == null || !_customDependencyIndex.TryGetValue(baseName, out var links) || links == null || links.Count == 0)
+                return new List<CustomDependencyLink>();
+            
+            var version = packageMetadata.Version;
+            return links
+                .Where(l => l?.Item != null && l.DependencyInfo != null && l.DependencyInfo.IsSatisfiedBy(version))
+                .GroupBy(l => l.Item.FilePath ?? l.Item.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.First())
+                .ToList();
+        }
+
         private void UpdateBothTabCounts(PackageItem packageItem)
         {
             _packageManager.PackageMetadata.TryGetValue(packageItem.MetadataKey, out var packageMetadata);
@@ -696,7 +716,9 @@ namespace VPM
             
             // Use dependency graph for O(1) lookup instead of iterating all packages
             var packageFullName = $"{packageMetadata?.CreatorName}.{packageMetadata?.PackageName}.{packageMetadata?.Version}";
-            _dependentsCount = _packageManager?.GetPackageDependentsCount(packageFullName) ?? 0;
+            var varDependentsCount = _packageManager?.GetPackageDependentsCount(packageFullName) ?? 0;
+            var customDependentsCount = GetCustomDependents(packageMetadata).Count;
+            _dependentsCount = varDependentsCount + customDependentsCount;
             
             DependenciesCountText.Text = $"({_dependenciesCount})";
             DependentsCountText.Text = $"({_dependentsCount})";
@@ -706,6 +728,7 @@ namespace VPM
         {
             var allDependencies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var allDependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var allCustomDependents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             
             foreach (var package in selectedPackages)
             {
@@ -734,11 +757,18 @@ namespace VPM
                         foreach (var dep in dependents)
                             allDependents.Add(dep);
                     }
+                    
+                    foreach (var customDependent in GetCustomDependents(packageMetadata))
+                    {
+                        var customKey = customDependent?.Item?.FilePath ?? customDependent?.Item?.Name;
+                        if (!string.IsNullOrEmpty(customKey))
+                            allCustomDependents.Add(customKey);
+                    }
                 }
             }
             
             _dependenciesCount = allDependencies.Count;
-            _dependentsCount = allDependents.Count;
+            _dependentsCount = allDependents.Count + allCustomDependents.Count;
             
             DependenciesCountText.Text = $"({_dependenciesCount})";
             DependentsCountText.Text = $"({_dependentsCount})";
@@ -847,38 +877,6 @@ namespace VPM
             UpdateToolbarButtons();
         }
         
-        /// <summary>
-        /// Checks if a dependency package exists in any external destination
-        /// Returns the destination's status color if found, otherwise empty string
-        /// </summary>
-        private string CheckDependencyInExternalDestinations(string packageBaseName)
-        {
-            if (string.IsNullOrEmpty(packageBaseName) || _packageManager?.PackageMetadata == null)
-                return "";
-            
-            // Search through all packages in metadata to find external ones matching the dependency
-            foreach (var kvp in _packageManager.PackageMetadata)
-            {
-                var metadata = kvp.Value;
-                
-                // Check if this is an external package
-                if (!metadata.IsExternal || string.IsNullOrEmpty(metadata.ExternalDestinationName))
-                    continue;
-                
-                // Build the package name from metadata (Creator.PackageName format)
-                var packageName = $"{metadata.CreatorName}.{metadata.PackageName}";
-                
-                // Check if this matches the dependency we're looking for
-                if (packageName.Equals(packageBaseName, StringComparison.OrdinalIgnoreCase))
-                {
-                    // Return the external destination's configured status color
-                    return metadata.ExternalDestinationColorHex ?? "#808080";
-                }
-            }
-            
-            return "";
-        }
-
         private void DisplayConsolidatedDependencies(List<PackageItem> selectedPackages)
         {
             // Use cached package status index - only refresh after actual file changes (downloads)
@@ -990,147 +988,6 @@ namespace VPM
             UpdateToolbarButtons();
         }
 
-        /// <summary>
-        /// Clear the dependencies display when no packages are selected
-        /// </summary>
-        private void ClearDependenciesDisplay()
-        {
-            // Clear any existing filter first
-            var view = CollectionViewSource.GetDefaultView(Dependencies);
-            if (view != null)
-            {
-                view.Filter = null;
-            }
-
-            // Clear all dependencies - no placeholder needed since nothing is selected
-            Dependencies.Clear();
-            _originalDependencies.Clear();
-            
-            // Update toolbar buttons after dependencies change
-            UpdateToolbarButtons();
-        }
-
-        /// <summary>
-        /// Display all available dependencies from currently filtered packages when no packages are selected
-        /// </summary>
-        private void DisplayAllAvailableDependencies()
-        {
-            // Use cached package status index - only refresh after actual file changes (downloads)
-            // RefreshPackageStatusIndex(force: true) is expensive and should not be called on every selection
-            _packageFileManager?.RefreshPackageStatusIndex(force: false);
-
-            // Clear any existing filter first
-            var depsView = CollectionViewSource.GetDefaultView(Dependencies);
-            if (depsView != null)
-            {
-                depsView.Filter = null;
-            }
-            
-            Dependencies.Clear();
-            _originalDependencies.Clear(); // Clear original dependencies when loading new ones
-            var allDependencies = new Dictionary<string, string>(); // dependency -> status
-            
-            
-            // Build lookup dictionary once for all dependency resolution
-            var packageLookup = BuildPackageLookupDictionary();
-            
-            // Get the filtered packages from the CollectionView (not the raw Packages collection)
-            var packagesView = CollectionViewSource.GetDefaultView(Packages);
-            var filteredPackages = packagesView?.Cast<PackageItem>().ToList() ?? Packages.ToList();
-            
-            
-            // Collect all dependencies from currently visible/filtered packages only
-            foreach (var packageItem in filteredPackages)
-            {
-                // Find the metadata for this visible package
-                var packageMetadata = _packageManager.PackageMetadata.Values
-                    .FirstOrDefault(p => Path.GetFileNameWithoutExtension(p.Filename) == packageItem.Name);
-                
-                if (packageMetadata?.Dependencies != null)
-                {
-                    foreach (var dependency in packageMetadata.Dependencies)
-                    {
-                        if (!allDependencies.ContainsKey(dependency))
-                        {
-                            // Check if dependency is available in our packages
-                            // Use GetPackageStatus which handles .latest, .min[NUMBER], and exact versions
-                            var depStatus = _packageFileManager?.GetPackageStatus(dependency) ?? "Missing";
-                            
-                            // If still missing, try lookup dictionary as fallback
-                            if (depStatus == "Missing")
-                            {
-                                // Parse the dependency to get base name for lookup
-                                var depInfo = DependencyVersionInfo.Parse(dependency);
-                                
-                                // Try to find by base name
-                                if (packageLookup.TryGetValue(depInfo.BaseName, out var depPackage) ||
-                                    packageLookup.TryGetValue(depInfo.BaseName.ToLowerInvariant(), out depPackage))
-                                {
-                                    depStatus = _packageFileManager?.GetPackageStatus(Path.GetFileNameWithoutExtension(depPackage.Filename)) ?? "Unknown";
-                                }
-                            }
-                            
-                            allDependencies[dependency] = depStatus;
-                        }
-                    }
-                }
-            }
-            
-            // Add all dependencies to the list, sorted by name
-            foreach (var kvp in allDependencies.OrderBy(d => d.Key))
-            {
-                var dependencyItem = new DependencyItem 
-                { 
-                    Name = kvp.Key, 
-                    Status = kvp.Value
-                };
-                Dependencies.Add(dependencyItem);
-                _originalDependencies.Add(dependencyItem); // Store for filtering
-            }
-            
-            // Update toolbar buttons after dependencies change
-            UpdateToolbarButtons();
-        }
-
-        /// <summary>
-        /// Build a lookup dictionary for fast package resolution
-        /// </summary>
-        private Dictionary<string, VarMetadata> BuildPackageLookupDictionary()
-        {
-            var lookup = new Dictionary<string, VarMetadata>(StringComparer.OrdinalIgnoreCase);
-            
-            if (_packageManager?.PackageMetadata == null) return lookup;
-            
-            foreach (var package in _packageManager.PackageMetadata.Values)
-            {
-                // Add various possible keys for the same package
-                var filename = Path.GetFileNameWithoutExtension(package.Filename);
-                var packageName = package.PackageName;
-                var creatorPackage = $"{package.CreatorName}.{package.PackageName}";
-                
-                // Add all possible keys (using TryAdd to avoid duplicates)
-                if (!string.IsNullOrEmpty(filename))
-                {
-                    lookup.TryAdd(filename, package);
-                    lookup.TryAdd(filename.ToLowerInvariant(), package);
-                }
-                
-                if (!string.IsNullOrEmpty(packageName))
-                {
-                    lookup.TryAdd(packageName, package);
-                    lookup.TryAdd(packageName.ToLowerInvariant(), package);
-                }
-                
-                if (!string.IsNullOrEmpty(package.CreatorName) && !string.IsNullOrEmpty(packageName))
-                {
-                    lookup.TryAdd(creatorPackage, package);
-                    lookup.TryAdd(creatorPackage.ToLowerInvariant(), package);
-                }
-            }
-            
-            return lookup;
-        }
-
         private void DisplayDependents(PackageItem packageItem)
         {
             // Use cached package status index - only refresh after actual file changes (downloads)
@@ -1161,6 +1018,7 @@ namespace VPM
             // Use dependency graph for O(1) lookup instead of iterating all packages
             var packageFullName = $"{packageMetadata.CreatorName}.{packageMetadata.PackageName}.{packageMetadata.Version}";
             var dependentsList = _packageManager.GetPackageDependents(packageFullName);
+            var customDependents = GetCustomDependents(packageMetadata);
 
             if (dependentsList.Count > 0)
             {
@@ -1212,7 +1070,28 @@ namespace VPM
                     _originalDependencies.Add(dependentItem);
                 }
             }
-            else
+            
+            if (customDependents.Count > 0)
+            {
+                foreach (var link in customDependents.OrderBy(l => l.Item?.Name))
+                {
+                    var item = link.Item;
+                    if (item == null)
+                        continue;
+                    
+                    var dependentItem = new DependencyItem
+                    {
+                        Name = item.Name,
+                        Version = "",
+                        Status = "Custom"
+                    };
+                    
+                    Dependencies.Add(dependentItem);
+                    _originalDependencies.Add(dependentItem);
+                }
+            }
+            
+            if (dependentsList.Count == 0 && customDependents.Count == 0)
             {
                 var noDepsItem = new DependencyItem
                 {
@@ -1222,7 +1101,8 @@ namespace VPM
                 Dependencies.Add(noDepsItem);
                 _originalDependencies.Add(noDepsItem);
             }
-
+            
+            // Reapply dependencies sorting after loading
             var depsState = _sortingManager?.GetSortingState("Dependencies");
             if (depsState?.CurrentSortOption is DependencySortOption depsSort)
             {
@@ -1248,6 +1128,7 @@ namespace VPM
 
             // Use dependency graph for O(1) lookups instead of iterating all packages
             var allDependents = new Dictionary<string, DependencyItem>(StringComparer.OrdinalIgnoreCase);
+            var allCustomDependents = new Dictionary<string, DependencyItem>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var package in selectedPackages)
             {
@@ -1305,11 +1186,29 @@ namespace VPM
                         Status = status
                     };
                 }
+                
+                foreach (var link in GetCustomDependents(packageMetadata))
+                {
+                    var item = link?.Item;
+                    if (item == null)
+                        continue;
+                    
+                    var customKey = item.FilePath ?? item.Name;
+                    if (string.IsNullOrEmpty(customKey) || allCustomDependents.ContainsKey(customKey))
+                        continue;
+                    
+                    allCustomDependents[customKey] = new DependencyItem
+                    {
+                        Name = item.Name,
+                        Version = "",
+                        Status = "Custom"
+                    };
+                }
             }
-
-            if (allDependents.Count > 0)
+            if (allDependents.Any() || allCustomDependents.Any())
             {
-                foreach (var dependent in allDependents.Values.OrderBy(d => d.Name))
+                // Sort dependencies by name
+                foreach (var dependent in allDependents.Values.Concat(allCustomDependents.Values).OrderBy(d => d.Name))
                 {
                     Dependencies.Add(dependent);
                     _originalDependencies.Add(dependent);
@@ -1319,13 +1218,14 @@ namespace VPM
             {
                 var noDepsItem = new DependencyItem
                 {
-                    Name = "No dependents found",
+                    Name = "No dependents",
                     Status = "N/A"
                 };
                 Dependencies.Add(noDepsItem);
                 _originalDependencies.Add(noDepsItem);
             }
-
+            
+            // Reapply dependencies sorting after loading
             var depsState = _sortingManager?.GetSortingState("Dependencies");
             if (depsState?.CurrentSortOption is DependencySortOption depsSort)
             {
@@ -1333,6 +1233,38 @@ namespace VPM
             }
 
             UpdateToolbarButtons();
+        }
+
+        /// <summary>
+        /// Checks if a dependency package exists in any external destination
+        /// Returns the destination's status color if found, otherwise empty string
+        /// </summary>
+        private string CheckDependencyInExternalDestinations(string packageBaseName)
+        {
+            if (string.IsNullOrEmpty(packageBaseName) || _packageManager?.PackageMetadata == null)
+                return "";
+            
+            // Search through all packages in metadata to find external ones matching the dependency
+            foreach (var kvp in _packageManager.PackageMetadata)
+            {
+                var metadata = kvp.Value;
+                
+                // Check if this is an external package
+                if (!metadata.IsExternal || string.IsNullOrEmpty(metadata.ExternalDestinationName))
+                    continue;
+                
+                // Build the package name from metadata (Creator.PackageName format)
+                var packageName = $"{metadata.CreatorName}.{metadata.PackageName}";
+                
+                // Check if this matches the dependency we're looking for
+                if (packageName.Equals(packageBaseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Return the external destination's configured status color
+                    return metadata.ExternalDestinationColorHex ?? "#808080";
+                }
+            }
+            
+            return "";
         }
 
         private void RefreshDependenciesDisplay()
@@ -1373,7 +1305,19 @@ namespace VPM
             RestoreDependenciesDataGridSelections(preservedSelections);
         }
 
+        private void ClearDependenciesDisplay()
+        {
+            Dependencies.Clear();
+            _originalDependencies.Clear();
+            
+            if (DependenciesCountText != null)
+                DependenciesCountText.Text = "(0)";
+            if (DependentsCountText != null)
+                DependentsCountText.Text = "(0)";
+            
+            UpdateToolbarButtons();
+        }
+
         #endregion
     }
 }
-

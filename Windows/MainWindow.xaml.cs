@@ -107,7 +107,13 @@ namespace VPM
         // Cache for dependents counts
         private Dictionary<string, int> _currentDependentsCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         
-
+        private readonly Dictionary<string, List<CustomDependencyLink>> _customDependencyIndex = new Dictionary<string, List<CustomDependencyLink>>(StringComparer.OrdinalIgnoreCase);
+        
+        private sealed class CustomDependencyLink
+        {
+            public CustomAtomItem Item { get; init; }
+            public DependencyVersionInfo DependencyInfo { get; init; }
+        }
         
         // Animation configuration - reduced for better responsiveness
         private const int SELECTION_DEBOUNCE_DELAY_MS = 15;

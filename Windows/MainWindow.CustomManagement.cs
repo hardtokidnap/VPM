@@ -70,6 +70,7 @@ namespace VPM
                     {
                         // Store original items for filtering
                         _originalCustomAtomItems = new List<CustomAtomItem>(items);
+                        RebuildCustomDependencyIndex(items);
                         
                         // Check if each item is marked as favorite or hidden
                         foreach (var item in items)
@@ -101,6 +102,48 @@ namespace VPM
             catch (Exception ex)
             {
                 SetStatus($"Error loading custom items: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Rebuilds the custom dependency reverse index
+        /// </summary>
+        private void RebuildCustomDependencyIndex(IEnumerable<CustomAtomItem> items)
+        {
+            _customDependencyIndex.Clear();
+            if (items == null)
+                return;
+            
+            foreach (var item in items)
+            {
+                if (item == null)
+                    continue;
+                if (!string.Equals(item.ContentType, "Scene", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (item.Dependencies == null || item.Dependencies.Count == 0)
+                    continue;
+                
+                foreach (var dep in item.Dependencies)
+                {
+                    if (string.IsNullOrWhiteSpace(dep))
+                        continue;
+                    
+                    var depInfo = DependencyVersionInfo.Parse(dep);
+                    if (string.IsNullOrEmpty(depInfo.BaseName))
+                        continue;
+                    
+                    if (!_customDependencyIndex.TryGetValue(depInfo.BaseName, out var links))
+                    {
+                        links = new List<CustomDependencyLink>();
+                        _customDependencyIndex[depInfo.BaseName] = links;
+                    }
+                    
+                    links.Add(new CustomDependencyLink
+                    {
+                        Item = item,
+                        DependencyInfo = depInfo
+                    });
+                }
             }
         }
 
