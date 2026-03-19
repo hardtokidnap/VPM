@@ -207,13 +207,13 @@ namespace VPM.Windows
                     StatusText.Text = $"Downloading {file.Filename}: {p.Progress:P0}";
                 });
 
-                var success = await _hubService.DownloadPackageAsync(
+                var downloadedPath = await _hubService.DownloadPackageAsync(
                     file.DownloadUrl,
                     _destinationFolder,
                     file.Filename.Replace(".var", ""),
                     progress);
 
-                if (success)
+                if (!string.IsNullOrEmpty(downloadedPath))
                 {
                     file.AlreadyHave = true;
                     file.CanDownload = false;

@@ -1269,7 +1269,7 @@ namespace VPM.Services
         /// <summary>
         /// Download a package from Hub
         /// </summary>
-        public async Task<bool> DownloadPackageAsync(
+        public async Task<string> DownloadPackageAsync(
             string downloadUrl, 
             string destinationPath, 
             string packageName,
@@ -1284,7 +1284,7 @@ namespace VPM.Services
                     HasError = true,
                     ErrorMessage = "No download URL available"
                 });
-                return false;
+                return null;
             }
 
             try
@@ -1311,6 +1311,21 @@ namespace VPM.Services
                 {
                     fileName = response.Content.Headers.ContentDisposition.FileName.Trim('"');
                 }
+                else if (response.Content.Headers.ContentDisposition?.FileNameStar != null)
+                {
+                    fileName = response.Content.Headers.ContentDisposition.FileNameStar.Trim('"');
+                }
+                
+                // Fallback to extracting from the final redirected URL if it looks like a .var file
+                if ((fileName == packageName + ".var" || fileName.Contains(".latest")) && response.RequestMessage?.RequestUri != null)
+                {
+                    var urlFileName = Path.GetFileName(response.RequestMessage.RequestUri.LocalPath);
+                    if (!string.IsNullOrEmpty(urlFileName) && urlFileName.EndsWith(".var", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Even if it's another .latest., we grab it so that the below logic catches it
+                        fileName = urlFileName;
+                    }
+                }
 
                 var fullPath = Path.Combine(destinationPath, fileName);
 
@@ -1318,41 +1333,161 @@ namespace VPM.Services
                 Directory.CreateDirectory(Path.GetDirectoryName(fullPath));
 
                 using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken);
-                using var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
-
-                var buffer = new byte[8192];
-                int bytesRead;
-                var lastProgressReport = DateTime.Now;
-
-                while ((bytesRead = await contentStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+                using (var fileStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true))
                 {
-                    await fileStream.WriteAsync(buffer, 0, bytesRead, cancellationToken);
-                    downloadedBytes += bytesRead;
+                    var buffer = new byte[8192];
+                    int bytesRead;
+                    var lastProgressReport = DateTime.Now;
 
-                    // Report progress every 100ms
-                    if ((DateTime.Now - lastProgressReport).TotalMilliseconds > 100)
+                    while ((bytesRead = await contentStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
                     {
-                        var progressValue = totalBytes > 0 ? (float)downloadedBytes / totalBytes : 0;
-                        progress?.Report(new HubDownloadProgress
+                        await fileStream.WriteAsync(buffer, 0, bytesRead, cancellationToken);
+                        downloadedBytes += bytesRead;
+
+                        // Report progress every 100ms
+                        if ((DateTime.Now - lastProgressReport).TotalMilliseconds > 100)
                         {
-                            PackageName = packageName,
-                            IsDownloading = true,
-                            Progress = progressValue,
-                            DownloadedBytes = downloadedBytes,
-                            TotalBytes = totalBytes
-                        });
-                        DownloadProgressChanged?.Invoke(this, new HubDownloadProgress
-                        {
-                            PackageName = packageName,
-                            IsDownloading = true,
-                            Progress = progressValue,
-                            DownloadedBytes = downloadedBytes,
-                            TotalBytes = totalBytes
-                        });
-                        lastProgressReport = DateTime.Now;
+                            var progressValue = totalBytes > 0 ? (float)downloadedBytes / totalBytes : 0;
+                            progress?.Report(new HubDownloadProgress
+                            {
+                                PackageName = packageName,
+                                IsDownloading = true,
+                                Progress = progressValue,
+                                DownloadedBytes = downloadedBytes,
+                                TotalBytes = totalBytes
+                            });
+                            DownloadProgressChanged?.Invoke(this, new HubDownloadProgress
+                            {
+                                PackageName = packageName,
+                                IsDownloading = true,
+                                Progress = progressValue,
+                                DownloadedBytes = downloadedBytes,
+                                TotalBytes = totalBytes
+                            });
+                            lastProgressReport = DateTime.Now;
+                        }
                     }
                 }
 
+                // If filename ends with .latest.var, try to read the actual name from meta.json inside the var
+                if (fileName.Contains(".latest", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        string metaJsonContent = null;
+                        using (var zip = System.IO.Compression.ZipFile.OpenRead(fullPath))
+                        {
+                            var metaEntry = zip.GetEntry("meta.json")
+                                ?? zip.Entries.FirstOrDefault(e => e.FullName.Equals("meta.json", StringComparison.OrdinalIgnoreCase));
+                            
+                            if (metaEntry != null)
+                            {
+                                using var stream = metaEntry.Open();
+                                using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+                                metaJsonContent = reader.ReadToEnd();
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(metaJsonContent))
+                        {
+                            var json = JsonNode.Parse(metaJsonContent);
+                            var creatorName = json?["creatorName"]?.GetValue<string>();
+                            var pkgName = json?["packageName"]?.GetValue<string>();
+                            
+                            int? pkgVersion = null;
+                            var versionNode = json?["packageVersion"];
+                            if (versionNode != null)
+                            {
+                                if (versionNode is JsonValue val && val.TryGetValue<int>(out var intVal))
+                                    pkgVersion = intVal;
+                                else if (versionNode is JsonValue strVal && strVal.TryGetValue<string>(out var str) && int.TryParse(str, out var parsedInt))
+                                    pkgVersion = parsedInt;
+                            }
+                            
+                            // Fallback to API resolution if version is missing
+                            if (!pkgVersion.HasValue)
+                            {
+                                // If meta.json was completely empty or malformed
+                                if (string.IsNullOrEmpty(creatorName) || string.IsNullOrEmpty(pkgName))
+                                {
+                                    var fnParts = fileName.Split('.');
+                                    if (fnParts.Length >= 3)
+                                    {
+                                        creatorName = fnParts[0];
+                                        pkgName = fnParts[1];
+                                    }
+                                }
+
+                                if (!string.IsNullOrEmpty(creatorName) && !string.IsNullOrEmpty(pkgName))
+                                {
+                                    try
+                                    {
+                                        var apiPkgName = $"{creatorName}.{pkgName}.latest";
+                                        var detail = await GetResourceDetailAsync(apiPkgName, true, cancellationToken);
+                                        
+                                        if (detail != null)
+                                        {
+                                            if (!string.IsNullOrEmpty(detail.VersionString) && int.TryParse(detail.VersionString, out var apiParsedStrInt))
+                                            {
+                                                pkgVersion = apiParsedStrInt;
+                                            }
+                                            else if (detail.HubFiles != null && detail.HubFiles.Count > 0)
+                                            {
+                                                foreach (var file in detail.HubFiles)
+                                                {
+                                                    if (!string.IsNullOrEmpty(file.Version) && int.TryParse(file.Version, out var fVer))
+                                                    {
+                                                        pkgVersion = fVer;
+                                                        break;
+                                                    }
+                                                    
+                                                    if (!string.IsNullOrEmpty(file.Filename) && 
+                                                        file.Filename.StartsWith($"{creatorName}.{pkgName}.", StringComparison.OrdinalIgnoreCase) && 
+                                                        file.Filename.EndsWith(".var", StringComparison.OrdinalIgnoreCase))
+                                                    {
+                                                        var parts = file.Filename.Split('.');
+                                                        if (parts.Length >= 4 && int.TryParse(parts[2], out var fNameVer))
+                                                        {
+                                                            pkgVersion = fNameVer;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    catch (Exception)
+                                    {
+                                        // Ignore API fallback errors
+                                    }
+                                }
+                            }
+                            
+                            if (!string.IsNullOrEmpty(creatorName) && !string.IsNullOrEmpty(pkgName) && pkgVersion.HasValue)
+                            {
+                                var newFileName = $"{creatorName}.{pkgName}.{pkgVersion.Value}.var";
+                                var newFullPath = Path.Combine(destinationPath, newFileName);
+
+                                if (File.Exists(newFullPath))
+                                {
+                                    File.Delete(fullPath);
+                                    fullPath = newFullPath;
+                                    fileName = newFileName;
+                                }
+                                else
+                                {
+                                    File.Move(fullPath, newFullPath);
+                                    fullPath = newFullPath;
+                                    fileName = newFileName;
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore file reading/renaming errors
+                    }
+                }
 
                 progress?.Report(new HubDownloadProgress
                 {
@@ -1363,7 +1498,7 @@ namespace VPM.Services
                     TotalBytes = totalBytes
                 });
 
-                return true;
+                return fullPath;
             }
             catch (Exception ex)
             {
@@ -1373,7 +1508,7 @@ namespace VPM.Services
                     HasError = true,
                     ErrorMessage = ex.Message
                 });
-                return false;
+                return null;
             }
         }
 
@@ -1523,12 +1658,13 @@ namespace VPM.Services
                     bool success = false;
                     try
                     {
-                        success = await DownloadPackageAsync(
+                        var downloadedPath = await DownloadPackageAsync(
                             download.DownloadUrl,
                             download.DestinationPath,
                             download.PackageName,
                             progress,
                             download.CancellationTokenSource.Token);
+                        success = !string.IsNullOrEmpty(downloadedPath);
                     }
                     catch (OperationCanceledException)
                     {

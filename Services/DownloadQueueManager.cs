@@ -334,7 +334,7 @@ namespace VPM.Services
                                 }
                             });
                             
-                            success = await hubService.DownloadPackageAsync(
+                            var downloadedFilePath = await hubService.DownloadPackageAsync(
                                 downloadUrl,
                                 destinationFolder,
                                 packageName,
@@ -342,11 +342,13 @@ namespace VPM.Services
                                 cts.Token
                             );
                             
+                            success = !string.IsNullOrEmpty(downloadedFilePath);
+                            
                             // Fire the completion event so UI gets updated
                             if (success)
                             {
-                                var fileName = System.IO.Path.Combine(destinationFolder, packageName + ".var");
-                                _downloader.FireDownloadCompleted(packageName, fileName, false);
+                                // Fire completion using the actual path downloaded, not the assumed ".var" name
+                                _downloader.FireDownloadCompleted(packageName, downloadedFilePath, false);
                             }
                         }
                     }
