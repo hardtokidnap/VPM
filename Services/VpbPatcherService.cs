@@ -144,6 +144,23 @@ namespace VPM.Services
             var manifest = await GetManifestAsync(gitRef, cancellationToken).ConfigureAwait(false);
             var usedGitRef = manifest.Count > 0 ? manifest[0].GitRef : gitRef;
 
+            // Cleanup any .bak.remove files from previous uninstall attempts
+            foreach (var entry in manifest)
+            {
+                if (entry.IsDirectory) continue;
+                try
+                {
+                    var destPath = GetDestinationPath(gameFolder, entry.RelativePath);
+                    var bakPath = destPath + ".bak.remove";
+                    if (File.Exists(bakPath))
+                        File.Delete(bakPath);
+                }
+                catch
+                {
+                    // Ignore cleanup errors
+                }
+            }
+
             var missing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var outdated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var patched = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -550,7 +567,17 @@ namespace VPM.Services
                 }
                 catch
                 {
-                    skipped++;
+                    try
+                    {
+                        var removePath = destPath + ".bak.remove";
+                        if (File.Exists(removePath)) File.Delete(removePath);
+                        File.Move(destPath, removePath);
+                        removed++;
+                    }
+                    catch
+                    {
+                        skipped++;
+                    }
                 }
             }
 
@@ -586,6 +613,34 @@ namespace VPM.Services
                     {
                     }
                 }
+            }
+            catch
+            {
+            }
+
+            foreach (var entry in manifest)
+            {
+                if (entry.RelativePath.EndsWith("VPB.dll", StringComparison.OrdinalIgnoreCase))
+                {
+                    var destPath = GetDestinationPath(gameFolder, entry.RelativePath);
+                    if (File.Exists(destPath))
+                    {
+                        try { File.Delete(destPath); } 
+                        catch { 
+                            try { 
+                                var removePath = destPath + ".bak.remove";
+                                if (File.Exists(removePath)) File.Delete(removePath);
+                                File.Move(destPath, removePath);
+                            } catch {} 
+                        }
+                    }
+                }
+            }
+
+            try
+            {
+                if (File.Exists(backupPath))
+                    File.Delete(backupPath);
             }
             catch
             {
