@@ -272,7 +272,7 @@ namespace VPM
                     if (skipNoDensity && hair.CurveDensity <= 0)
                         continue;
                     // Skip if the target density is greater than the current
-                    if (targetDensity > hair.CurveDensity)
+                    if (targetDensity >= hair.CurveDensity)
                         continue;
 
                     if (targetDensity == -1)
