@@ -1607,6 +1607,9 @@ namespace VPM
             {
                 _suppressSelectionEvents = false;
             }
+
+            if (PackageDataGrid?.SelectedItems?.Count > 0)
+                _ = RefreshSelectionDisplaysImmediate();
             
             return Task.CompletedTask;
         }
