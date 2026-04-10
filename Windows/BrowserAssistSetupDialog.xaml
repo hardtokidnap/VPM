@@ -4,7 +4,7 @@
         Title="BrowserAssist Integration"
         SizeToContent="Height"
         Width="640"
-        MaxHeight="800"
+        MaxHeight="860"
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         Background="Transparent"
@@ -161,6 +161,7 @@
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="•" Style="{StaticResource BulletStyle}"/>
@@ -229,11 +230,11 @@
                     </Border>
 
                     <!-- Note -->
-                    <StackPanel Orientation="Horizontal" Margin="4,4,0,4">
-                        <Path Data="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" Fill="{DynamicResource SecondaryTextBrush}" Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Top" Margin="0,2,8,0"/>
+                    <DockPanel Margin="4,4,0,4">
+                        <Path DockPanel.Dock="Left" Data="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" Fill="{DynamicResource SecondaryTextBrush}" Width="14" Height="14" Stretch="Uniform" VerticalAlignment="Top" Margin="0,2,8,0"/>
                         <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" FontSize="12.5" TextWrapping="Wrap" VerticalAlignment="Center"
                                    Text="Scanning your offloaded folder may take a moment depending on the number of packages. The application may become unresponsive, this is completely normal."/>
-                    </StackPanel>
+                    </DockPanel>
                 </StackPanel>
             </ScrollViewer>
 
